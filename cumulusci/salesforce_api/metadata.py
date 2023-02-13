@@ -29,6 +29,7 @@ from cumulusci.salesforce_api.exceptions import (
     MetadataParseError,
 )
 from cumulusci.utils import parse_api_datetime, zip_subfolder
+from cumulusci.tasks.apex.testrunner import RunApexTests
 
 # If pyOpenSSL is installed, make sure it's not used for requests
 # (it's not needed in the verisons of Python we support)
@@ -63,6 +64,10 @@ class BaseMetadataApiCall(object):
             if api_version
             else task.project_config.project__package__api_version
         )
+        # Set up file names for test output
+        self.options = {"junit_output": "test_results.xml",
+                        "json_output": "test_results.json"
+        } 
 
     def __call__(self):
         self.task.logger.info("Pending")
@@ -425,6 +430,10 @@ class ApiDeploy(BaseMetadataApiCall):
     def _process_response(self, response):
         resp_xml = parseString(response.content)
         status = resp_xml.getElementsByTagName("status")
+
+        # Create Array for Apex Test Results
+        test_results = []
+
         if status:
             status = status[0].firstChild.nodeValue
         else:
@@ -436,6 +445,31 @@ class ApiDeploy(BaseMetadataApiCall):
         # related to done
         if status in ["Succeeded", "SucceededPartial"]:
             self._set_status("Success", status)
+
+            # Parse out test success to add to log
+            successes = resp_xml.getElementsByTagName("successes")
+            for success in successes:
+                # Get needed values from subelements
+                methodName = self._get_element_value(success, "methodName")
+                className = self._get_element_value(success, "name")
+                stats = {"duration": self._get_element_value(success, "time")}
+                
+                test_results.append(
+                    {
+                        "Children": None,
+                        "ClassName": className,
+                        "Method": methodName,
+                        "Message": None,
+                        "Outcome": None,
+                        "StackTrace": None,
+                        "Stats": stats,
+                        "TestTimestamp": None,
+                    }
+                )
+
+            # Use existing function for apex tests to format and write output
+            RunApexTests._write_output(self,test_results)
+
         else:
             # If failed, parse out the problem text and raise appropriate exception
             messages = []
@@ -519,6 +553,27 @@ class ApiDeploy(BaseMetadataApiCall):
                     log = "\n\n".join(messages)
                     raise MetadataApiError(log, response)
 
+            # Parse out test success to add to log
+            successes = resp_xml.getElementsByTagName("successes")
+            for success in successes:
+                # Get needed values from subelements
+                methodName = self._get_element_value(success, "methodName")
+                className = self._get_element_value(success, "name")
+                stats = {"duration": self._get_element_value(success, "time")}
+                
+                test_results.append(
+                    {
+                        "Children": None,
+                        "ClassName": className,
+                        "Method": methodName,
+                        "Message": None,
+                        "Outcome": None,
+                        "StackTrace": None,
+                        "Stats": stats,
+                        "TestTimestamp": None,
+                    }
+                )
+
             # Parse out any failure text (from test failures in production
             # deployments) and add to log
             failures = resp_xml.getElementsByTagName("failures")
@@ -526,12 +581,34 @@ class ApiDeploy(BaseMetadataApiCall):
                 # Get needed values from subelements
                 namespace = self._get_element_value(failure, "namespace")
                 stacktrace = self._get_element_value(failure, "stackTrace")
+                # Values for output file
+                methodName = self._get_element_value(failure, "methodName")
+                className = self._get_element_value(failure, "name")
+                stats = {"duration": self._get_element_value(failure, "time")}
+                testMessage = self._get_element_value(failure, "message")
+
                 message = ["Apex Test Failure: "]
                 if namespace:
                     message.append(f"from namespace {namespace}: ")
                 if stacktrace:
                     message.append(stacktrace)
                 messages.append("".join(message))
+                
+                test_results.append(
+                    {
+                        "Children": None,
+                        "ClassName": className,
+                        "Method": methodName,
+                        "Message": testMessage,
+                        "Outcome": "Fail",
+                        "StackTrace": stacktrace,
+                        "Stats": stats,
+                        "TestTimestamp": None,
+                    }
+                )       
+
+            # Use existing function for apex tests to format and write output
+            RunApexTests._write_output(self,test_results)
 
             if messages:
                 # Deploy failures due to a component failure should raise MetadataComponentFailure
