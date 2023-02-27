@@ -426,6 +426,61 @@ class ApiDeploy(BaseMetadataApiCall):
             run_tests=run_tests,
             api_version=self.api_version,
         )
+    
+    def _parse_elements(self, file, elementType):
+        # Create Array for Test Results
+        parsed_results = []
+        
+        # Parse out test success to add to log
+        elements = file.getElementsByTagName(elementType)
+        for element in elements:
+            # Get needed values from subelements
+            methodName = self._get_element_value(element, "methodName")
+            className = self._get_element_value(element, "name")
+            stats = {"duration": self._get_element_value(element, "time")}
+
+            # Parse out any failure text (from test failures in production
+            # deployments) and add to log
+            if( element == "failures" ):
+                # Values for output file
+                namespace = self._get_element_value(element, "namespace")
+                stacktrace = self._get_element_value(element, "stackTrace")
+                testMessage = self._get_element_value(element, "message")
+
+                message = ["Apex Test Failure: "]
+                if namespace:
+                    message.append(f"from namespace {namespace}: ")
+                if stacktrace:
+                    message.append(stacktrace)
+                messages.append("".join(message))
+                
+                parsed_results.append(
+                    {
+                        "Children": None,
+                        "ClassName": className,
+                        "Method": methodName,
+                        "Message": testMessage,
+                        "Outcome": "Fail",
+                        "StackTrace": stacktrace,
+                        "Stats": stats,
+                        "TestTimestamp": None,
+                    }
+                )                
+            else:
+                parsed_results.append(
+                    {
+                        "Children": None,
+                        "ClassName": className,
+                        "Method": methodName,
+                        "Message": None,
+                        "Outcome": None,
+                        "StackTrace": None,
+                        "Stats": stats,
+                        "TestTimestamp": None,
+                    }
+                )
+
+        return parsed_results
 
     def _process_response(self, response):
         resp_xml = parseString(response.content)
@@ -445,27 +500,8 @@ class ApiDeploy(BaseMetadataApiCall):
         # related to done
         if status in ["Succeeded", "SucceededPartial"]:
             self._set_status("Success", status)
-
-            # Parse out test success to add to log
-            successes = resp_xml.getElementsByTagName("successes")
-            for success in successes:
-                # Get needed values from subelements
-                methodName = self._get_element_value(success, "methodName")
-                className = self._get_element_value(success, "name")
-                stats = {"duration": self._get_element_value(success, "time")}
-                
-                test_results.append(
-                    {
-                        "Children": None,
-                        "ClassName": className,
-                        "Method": methodName,
-                        "Message": None,
-                        "Outcome": None,
-                        "StackTrace": None,
-                        "Stats": stats,
-                        "TestTimestamp": None,
-                    }
-                )
+            
+            test_results = self._parse_elements(resp_xml, "successes")
 
             # Use existing function for apex tests to format and write output
             RunApexTests._write_output(self,test_results)
@@ -552,60 +588,12 @@ class ApiDeploy(BaseMetadataApiCall):
                 if messages:
                     log = "\n\n".join(messages)
                     raise MetadataApiError(log, response)
-
-            # Parse out test success to add to log
-            successes = resp_xml.getElementsByTagName("successes")
-            for success in successes:
-                # Get needed values from subelements
-                methodName = self._get_element_value(success, "methodName")
-                className = self._get_element_value(success, "name")
-                stats = {"duration": self._get_element_value(success, "time")}
-                
-                test_results.append(
-                    {
-                        "Children": None,
-                        "ClassName": className,
-                        "Method": methodName,
-                        "Message": None,
-                        "Outcome": None,
-                        "StackTrace": None,
-                        "Stats": stats,
-                        "TestTimestamp": None,
-                    }
-                )
+            
+            test_results = self._parse_elements(resp_xml, "successes")
 
             # Parse out any failure text (from test failures in production
-            # deployments) and add to log
-            failures = resp_xml.getElementsByTagName("failures")
-            for failure in failures:
-                # Get needed values from subelements
-                namespace = self._get_element_value(failure, "namespace")
-                stacktrace = self._get_element_value(failure, "stackTrace")
-                # Values for output file
-                methodName = self._get_element_value(failure, "methodName")
-                className = self._get_element_value(failure, "name")
-                stats = {"duration": self._get_element_value(failure, "time")}
-                testMessage = self._get_element_value(failure, "message")
-
-                message = ["Apex Test Failure: "]
-                if namespace:
-                    message.append(f"from namespace {namespace}: ")
-                if stacktrace:
-                    message.append(stacktrace)
-                messages.append("".join(message))
-                
-                test_results.append(
-                    {
-                        "Children": None,
-                        "ClassName": className,
-                        "Method": methodName,
-                        "Message": testMessage,
-                        "Outcome": "Fail",
-                        "StackTrace": stacktrace,
-                        "Stats": stats,
-                        "TestTimestamp": None,
-                    }
-                )       
+            # deployments) and add to log            
+            test_results = self._parse_elements(resp_xml, "failures")    
 
             # Use existing function for apex tests to format and write output
             RunApexTests._write_output(self,test_results)
