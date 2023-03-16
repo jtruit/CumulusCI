@@ -64,10 +64,6 @@ class BaseMetadataApiCall(object):
             if api_version
             else task.project_config.project__package__api_version
         )
-        # Set up file names for test output
-        self.options = {"junit_output": "test_results.xml",
-                        "json_output": "test_results.json"
-        } 
 
     def __call__(self):
         self.task.logger.info("Pending")
@@ -381,6 +377,7 @@ class ApiDeploy(BaseMetadataApiCall):
         self,
         task,
         package_zip,
+        options={},
         purge_on_delete=None,
         api_version=None,
         check_only=False,
@@ -395,7 +392,13 @@ class ApiDeploy(BaseMetadataApiCall):
         self.check_only = "true" if check_only else "false"
         self.test_level = test_level
         self.package_zip = package_zip
-        self.run_tests = run_tests or []
+        self.options = options   
+        # Set default values if nothing is passed
+        if self.options.get("junit_output") is None:        
+            self.options["junit_output"] = "test_results.xml"
+        if self.options.get("json_output") is None:        
+            self.options["json_output"] = "test_results.json"
+        self.run_tests = run_tests or []     
 
     def _set_purge_on_delete(self, purge_on_delete):
         if not purge_on_delete or purge_on_delete == "false":
@@ -506,10 +509,8 @@ class ApiDeploy(BaseMetadataApiCall):
         if status in ["Succeeded", "SucceededPartial"]:
             self._set_status("Success", status)
             
-            
-            test_results = self._parse_elements(resp_xml)
-
             # Use existing function for apex tests to format and write output
+            test_results = self._parse_elements(resp_xml)
             RunApexTests._write_output(self,test_results)
 
         else:
@@ -594,10 +595,23 @@ class ApiDeploy(BaseMetadataApiCall):
                 if messages:
                     log = "\n\n".join(messages)
                     raise MetadataApiError(log, response)
-            
-            test_results = self._parse_elements(resp_xml)
+
+            # Parse out any failure text (from test failures in production
+            # deployments) and add to log
+            failures = resp_xml.getElementsByTagName("failures")
+            for failure in failures:
+                # Get needed values from subelements
+                namespace = self._get_element_value(failure, "namespace")
+                stacktrace = self._get_element_value(failure, "stackTrace")
+                message = ["Apex Test Failure: "]
+                if namespace:
+                    message.append(f"from namespace {namespace}: ")
+                if stacktrace:
+                    message.append(stacktrace)
+                messages.append("".join(message))            
 
             # Use existing function for apex tests to format and write output
+            test_results = self._parse_elements(resp_xml)
             RunApexTests._write_output(self,test_results)
 
             if messages:
